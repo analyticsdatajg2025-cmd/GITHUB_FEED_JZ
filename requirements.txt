@@ -1,0 +1,6 @@
+pandas
+requests
+Pillow
+gspread
+oauth2client
+tqdm

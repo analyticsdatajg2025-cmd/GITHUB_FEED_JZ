@@ -1,0 +1,45 @@
+name: Actualizar Feed y Generar Imagenes
+
+on:
+  # Se ejecuta manualmente si quieres probar
+  workflow_dispatch:
+  # Se ejecuta automáticamente cada 6 horas (puedes ajustar el cron)
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # 3 horas por si la primera carga es masiva
+    permissions:
+      contents: write    # Permiso para hacer commit de las imágenes nuevas
+    
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Trae todo el historial
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+
+      - name: Ejecutar Script de Procesamiento
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }} # Inyectamos la llave secreta
+        run: |
+          python main.py
+
+      - name: Commit y Push de nuevas imágenes
+        run: |
+          git config --global user.name 'GitHub Action Bot'
+          git config --global user.email 'action@github.com'
+          # Añadimos la carpeta images
+          git add images/
+          # Hacemos commit solo si hay cambios
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Nuevas imagenes de productos" && git push)
