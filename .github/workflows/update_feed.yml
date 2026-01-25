@@ -3,12 +3,20 @@ name: Actualizar Feed y Generar Imagenes
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */3 * * *'
+    # HORARIOS PERÚ (UTC-5) AJUSTADOS A UTC
+    - cron: '07 05 * * *' # 12:07 AM PE
+    - cron: '07 08 * * *' # 03:07 AM PE
+    - cron: '07 11 * * *' # 06:07 AM PE
+    - cron: '07 14 * * *' # 09:07 AM PE
+    - cron: '07 17 * * *' # 12:07 PM PE
+    - cron: '07 20 * * *' # 03:07 PM PE
+    - cron: '07 23 * * *' # 06:07 PM PE
+    - cron: '07 02 * * *' # 09:07 PM PE
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Seguridad máxima, aunque apuntamos a terminar antes
+    timeout-minutes: 360 # 6 Horas max (Seguridad)
     permissions:
       contents: write
     
@@ -39,12 +47,12 @@ jobs:
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          # 1. Configuramos identidad de Git
+          # 1. Configurar Git antes de empezar
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'action@github.com'
           
-          # 2. Pull por si acaso
+          # 2. Asegurar tener lo ultimo
           git pull origin main || true
           
-          # 3. Lanzamos el script que tiene el auto-save interno
+          # 3. Correr Python
           python main.py
