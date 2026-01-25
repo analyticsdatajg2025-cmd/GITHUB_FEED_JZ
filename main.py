@@ -3,6 +3,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import os
+import textwrap  # <--- ¡AQUÍ ESTABA EL FALTANTE!
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
@@ -180,6 +181,7 @@ def procesar_fila(row):
         while size_title > 20:
             avg_char = f_title.getlength("a") or 10
             chars_per_line = int(540 / avg_char)
+            # AQUÍ SE USA TEXTWRAP
             temp_lines = textwrap.wrap(title_txt, width=chars_per_line)
             if len(temp_lines) <= 3 and all(draw.textlength(l, font=f_title) <= 540 for l in temp_lines):
                 lines = temp_lines
