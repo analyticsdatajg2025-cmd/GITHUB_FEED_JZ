@@ -3,13 +3,13 @@ name: Actualizar Feed y Generar Imagenes
 on:
   workflow_dispatch:
   schedule:
-    # Ejecutar cada 3 horas (00:00, 03:00, 06:00...)
+    # Ejecutar cada 3 horas (o a las horas que prefieras)
     - cron: '0 */3 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180 # Mantenemos 3h de margen total de seguridad
+    timeout-minutes: 120 # 2 horas de seguridad
     permissions:
       contents: write
     
@@ -19,18 +19,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # OPTIMIZACIÓN: Cachear pip para que no instale todo de cero cada vez
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip' # <--- ESTO ACTIVA EL CACHÉ DE LIBRERÍAS
 
       - name: Instalar dependencias
-        # El sistema revisará si ya existe cache. Si no, instala.
         run: |
           pip install -r requirements.txt
 
-      - name: Ejecutar Script de Procesamiento Inteligente
+      - name: Ejecutar Script Turbo (50 Hilos)
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
@@ -41,5 +48,6 @@ jobs:
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'action@github.com'
           git add images/
-          # Commit solo si hay cambios reales
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Lote incremental de imagenes" && git push)
+          # Hacemos commit si hay cambios. Si son demasiados archivos, git puede quejarse,
+          # pero normalmente aguanta bien.
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Nuevas imagenes generadas" && git push)
