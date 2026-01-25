@@ -3,13 +3,12 @@ name: Actualizar Feed y Generar Imagenes
 on:
   workflow_dispatch:
   schedule:
-    # Ejecutar cada 3 horas (o a las horas que prefieras)
-    - cron: '0 */3 * * *'
+    - cron: '0 */4 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # 2 horas de seguridad
+    timeout-minutes: 360 # Seguridad máxima, aunque apuntamos a terminar antes
     permissions:
       contents: write
     
@@ -19,7 +18,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # OPTIMIZACIÓN: Cachear pip para que no instale todo de cero cada vez
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -37,17 +35,16 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Ejecutar Script Turbo (50 Hilos)
+      - name: Ejecutar Script por Lotes
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          python main.py
-
-      - name: Commit y Push de nuevas imágenes
-        run: |
+          # 1. Configuramos identidad de Git
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'action@github.com'
-          git add images/
-          # Hacemos commit si hay cambios. Si son demasiados archivos, git puede quejarse,
-          # pero normalmente aguanta bien.
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update: Nuevas imagenes generadas" && git push)
+          
+          # 2. Pull por si acaso
+          git pull origin main || true
+          
+          # 3. Lanzamos el script que tiene el auto-save interno
+          python main.py
