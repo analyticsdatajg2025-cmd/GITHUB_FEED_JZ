@@ -1,13 +1,11 @@
 name: Actualizar Feed y Generar Imagenes
 
 on:
-  # 1. Ponemos Schedule primero (como en tu archivo antiguo)
   schedule:
-    # HORAS UTC: 02,05,08... EQUIVALEN A TUS HORAS PERÚ (9PM, 12AM, 3AM...)
-    # Esta sintaxis de una sola línea es más segura y no falla.
+    # Horas exactas para Perú (UTC-5): 02,05,08,11,14,17,20,23 UTC
     - cron: '7 2,5,8,11,14,17,20,23 * * *'
   
-  # 2. Agregamos esto para FORZAR que se registre el cambio apenas guardes
+  # Este disparador es clave para probar y resetear el reloj
   push:
     branches: [ "main" ]
     
@@ -47,12 +45,7 @@ jobs:
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          # 1. Configurar Git
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'action@github.com'
-          
-          # 2. Pull preventivo
           git pull origin main || true
-          
-          # 3. Ejecutar
           python main.py
