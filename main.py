@@ -3,7 +3,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import os
-import textwrap  # <--- ¡AQUÍ ESTABA EL FALTANTE!
+import textwrap 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
@@ -61,17 +61,10 @@ F_REG_PATH = "HurmeGeometricSans1.otf"
 
 # --- 2. FUNCIONES AUXILIARES ---
 def get_clean_price_val(val_str):
-    """
-    Extrae el valor numérico de '119.00 PEN' -> 119.0
-    Solo para uso interno de cálculo y nombre de archivo.
-    """
     if pd.isna(val_str): return 0.0
-    # Quitamos PEN, comas y espacios
     s = str(val_str).upper().replace(' PEN', '').replace('PEN', '').replace(',', '').strip()
-    try:
-        return float(s)
-    except:
-        return 0.0
+    try: return float(s)
+    except: return 0.0
 
 def git_autosave(batch_index):
     try:
@@ -86,39 +79,36 @@ def git_autosave(batch_index):
 # --- 3. PROCESAMIENTO ---
 def procesar_fila(row):
     try:
-        # A. PREPARAR DATOS (Sin modificar el Excel original)
+        # A. PREPARAR DATOS
         raw_sale_price = str(row['sale_price'])
         raw_price = str(row['price'])
         
-        # Limpiamos solo para usar en el código (float)
         val_sale_price = get_clean_price_val(raw_sale_price)
         val_price = get_clean_price_val(raw_price)
 
-        # Nombre de archivo limpio (ej: 105037_119_00.jpg)
         price_tag = f"{val_sale_price:.2f}".replace('.', '_')
         file_name = f"{row['id']}_{price_tag}.jpg"
         target_path = os.path.join(OUTPUT_DIR, file_name)
         final_url = f"{BASE_URL_IMG}{file_name}"
 
-        # B. VALIDACIÓN RÁPIDA
+        # B. VALIDACIÓN RÁPIDA (Si existe, salta inmediatamente)
         if os.path.exists(target_path):
             return final_url, False
 
-        # C. Limpieza de versiones viejas
+        # C. Limpieza viejos
         try:
             for f in glob.glob(os.path.join(OUTPUT_DIR, f"{row['id']}_*.jpg")):
                 os.remove(f)
         except: pass
 
-        # D. Descargar Imagen Original
+        # D. Descargar
         res_prod = requests.get(row['image_link'], headers=HEADERS, timeout=8)
         if res_prod.status_code != 200: 
-            # Si falla la descarga, retornamos el link original
             return row['image_link'], False
         
         prod_img = Image.open(BytesIO(res_prod.content)).convert("RGBA")
 
-        # E. DISEÑO GRÁFICO
+        # E. DISEÑO
         color_morado = (141, 54, 197)
         canvas = Image.new('RGB', (1080, 1080), color=color_morado)
         draw = ImageDraw.Draw(canvas)
@@ -138,7 +128,6 @@ def procesar_fila(row):
         MARGIN_RIGHT, MARGIN_LEFT = 1010, 70
         WIDTH_PRICE_MAX = 400 
         
-        # Usamos el valor numérico limpio para los textos
         p_sale_str = f"{val_sale_price:.2f}"
         size_sale = 135
         f_sale = load_font(F_BOLD_PATH, size_sale)
@@ -167,7 +156,6 @@ def procesar_fila(row):
         size_brand = 28
         f_brand = load_font(F_BOLD_PATH, size_brand)
         
-        # Ajuste de texto de marca
         while size_brand > 18:
             if draw.textlength(brand_txt, font=f_brand) < 540: break
             size_brand -= 2
@@ -181,7 +169,6 @@ def procesar_fila(row):
         while size_title > 20:
             avg_char = f_title.getlength("a") or 10
             chars_per_line = int(540 / avg_char)
-            # AQUÍ SE USA TEXTWRAP
             temp_lines = textwrap.wrap(title_txt, width=chars_per_line)
             if len(temp_lines) <= 3 and all(draw.textlength(l, font=f_title) <= 540 for l in temp_lines):
                 lines = temp_lines
@@ -200,52 +187,52 @@ def procesar_fila(row):
         return final_url, True
 
     except Exception as e:
-        # Si falla, imprimimos error en consola para que sepas por qué
         print(f"Error en ID {row.get('id', '?')}: {e}")
         return row['image_link'], False
 
-# --- 4. MAIN (BLINDADO CONTRA CAÍDAS) ---
+# --- 4. MAIN ---
 def main():
     print(">>> [1/4] Descargando Feed...")
     df = pd.read_csv(FEED_URL, sep='\t', on_bad_lines='skip', low_memory=False)
     df.columns = [c.strip() for c in df.columns]
     
-    # Filtros
+    # 1. Filtros Básicos
     df = df[df['availability'] == 'in stock'].copy()
     df = df[df['image_link'].notna()]
     df = df[df['image_link'].str.endswith('.jpg', na=False)]
     
-    # NOTA IMPORTANTE: YA NO modificamos df['price'] globalmente
-    # Mantenemos "119.00 PEN" para el Sheet.
+    # 2. 🔥 ELIMINAR DUPLICADOS (NUEVO)
+    # Esto asegura que si el ID se repite, solo quede el primero
+    total_antes = len(df)
+    df.drop_duplicates(subset=['id'], keep='first', inplace=True)
+    total_ahora = len(df)
+    print(f">>> Duplicados eliminados: {total_antes - total_ahora}")
     
     rows_to_process = df.to_dict('records')
     total_products = len(rows_to_process)
-    print(f">>> Total productos: {total_products}")
+    print(f">>> Total productos ÚNICOS a procesar: {total_products}")
 
-    # --- INICIALIZAR SHEETS CON REINTENTOS ---
+    # --- INICIALIZAR SHEETS (CON BLINDAJE ANTI-ERROR 503) ---
     print(">>> [2/4] Conectando a Google Sheets...")
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
-    # BUCLE DE REINTENTO (Retry Loop)
     max_retries = 5
     sheet = None
     
     for attempt in range(max_retries):
         try:
-            # Intentamos conectar
             sheet = client.open_by_key(SHEET_ID).sheet1
             print("   ✅ Conexión exitosa a Sheets.")
-            break # Si funciona, salimos del bucle
+            break 
         except Exception as e:
             print(f"   ⚠️ Intento {attempt+1}/{max_retries} fallido: {e}")
             if attempt < max_retries - 1:
-                print("   ⏳ Esperando 10 segundos...")
-                time.sleep(10) # Pausa de seguridad
+                time.sleep(10)
             else:
                 print("   ❌ Error crítico: No se pudo conectar a Sheets.")
-                exit(1) # Cerramos con error si falla 5 veces
+                exit(1)
     
     # Limpiamos hoja
     try:
@@ -263,29 +250,23 @@ def main():
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
             results = list(tqdm(executor.map(procesar_fila, batch), total=len(batch), leave=False))
         
-        # Recuperamos URLs nuevas
         batch_urls = [r[0] for r in results]
         any_new = any(r[1] for r in results)
         
-        # Creamos DF temporal para subir este lote
         batch_df = pd.DataFrame(batch)
-        # Aquí sustituimos la columna image_link por la nueva (GitHub)
         batch_df['image_link'] = batch_urls 
-        # Convertimos todo a string para que "119.00 PEN" suba bien
         batch_df = batch_df.astype(str) 
 
-        # Auto-Save Git
         if any_new: git_autosave(i // BATCH_SIZE + 1)
         else: print("   ⏩ (Skipping Git Push - No hay imágenes nuevas)")
 
-        # Auto-Update Sheets
         try:
             data = batch_df.values.tolist()
             sheet.append_rows(data, value_input_option='RAW')
             print(f"   📊 [Sheets] Bloque subido.")
             time.sleep(2)
         except Exception as e:
-            print(f"   ⚠️ Error Sheets: {e}")
+            print(f"   ⚠️ Error Sheets Upload: {e}")
             time.sleep(10)
             try: sheet.append_rows(data, value_input_option='RAW')
             except: pass
