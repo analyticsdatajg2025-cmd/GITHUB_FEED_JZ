@@ -204,7 +204,7 @@ def procesar_fila(row):
         print(f"Error en ID {row.get('id', '?')}: {e}")
         return row['image_link'], False
 
-# --- 4. MAIN ---
+# --- 4. MAIN (BLINDADO CONTRA CAÍDAS) ---
 def main():
     print(">>> [1/4] Descargando Feed...")
     df = pd.read_csv(FEED_URL, sep='\t', on_bad_lines='skip', low_memory=False)
@@ -222,15 +222,37 @@ def main():
     total_products = len(rows_to_process)
     print(f">>> Total productos: {total_products}")
 
-    # --- INICIALIZAR SHEETS ---
-    print(">>> [2/4] Limpiando Google Sheets...")
+    # --- INICIALIZAR SHEETS CON REINTENTOS ---
+    print(">>> [2/4] Conectando a Google Sheets...")
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).sheet1
     
-    sheet.clear()
-    sheet.append_row(list(df.columns))
+    # BUCLE DE REINTENTO (Retry Loop)
+    max_retries = 5
+    sheet = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Intentamos conectar
+            sheet = client.open_by_key(SHEET_ID).sheet1
+            print("   ✅ Conexión exitosa a Sheets.")
+            break # Si funciona, salimos del bucle
+        except Exception as e:
+            print(f"   ⚠️ Intento {attempt+1}/{max_retries} fallido: {e}")
+            if attempt < max_retries - 1:
+                print("   ⏳ Esperando 10 segundos...")
+                time.sleep(10) # Pausa de seguridad
+            else:
+                print("   ❌ Error crítico: No se pudo conectar a Sheets.")
+                exit(1) # Cerramos con error si falla 5 veces
+    
+    # Limpiamos hoja
+    try:
+        sheet.clear()
+        sheet.append_row(list(df.columns))
+    except Exception as e:
+        print(f"Error al limpiar hoja: {e}")
     
     print(f">>> [3/4] Procesando en Bloques de {BATCH_SIZE}...")
     
