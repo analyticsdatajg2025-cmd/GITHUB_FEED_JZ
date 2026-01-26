@@ -1,22 +1,22 @@
 name: Actualizar Feed y Generar Imagenes
 
 on:
-  workflow_dispatch:
+  # 1. Ponemos Schedule primero (como en tu archivo antiguo)
   schedule:
-    # HORARIOS PERÚ (UTC-5) AJUSTADOS A UTC
-    - cron: '07 05 * * *' # 12:07 AM PE
-    - cron: '07 08 * * *' # 03:07 AM PE
-    - cron: '07 11 * * *' # 06:07 AM PE
-    - cron: '07 14 * * *' # 09:07 AM PE
-    - cron: '07 17 * * *' # 12:07 PM PE
-    - cron: '07 20 * * *' # 03:07 PM PE
-    - cron: '07 23 * * *' # 06:07 PM PE
-    - cron: '07 02 * * *' # 09:07 PM PE
+    # HORAS UTC: 02,05,08... EQUIVALEN A TUS HORAS PERÚ (9PM, 12AM, 3AM...)
+    # Esta sintaxis de una sola línea es más segura y no falla.
+    - cron: '7 2,5,8,11,14,17,20,23 * * *'
+  
+  # 2. Agregamos esto para FORZAR que se registre el cambio apenas guardes
+  push:
+    branches: [ "main" ]
+    
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 Horas max (Seguridad)
+    timeout-minutes: 360
     permissions:
       contents: write
     
@@ -47,12 +47,12 @@ jobs:
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          # 1. Configurar Git antes de empezar
+          # 1. Configurar Git
           git config --global user.name 'GitHub Action Bot'
           git config --global user.email 'action@github.com'
           
-          # 2. Asegurar tener lo ultimo
+          # 2. Pull preventivo
           git pull origin main || true
           
-          # 3. Correr Python
+          # 3. Ejecutar
           python main.py
