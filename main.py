@@ -13,7 +13,7 @@ import subprocess
 import re
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-from urllib.parse import quote # <--- NUEVA LIBRERÍA PARA LIMPIAR URLs
+from urllib.parse import quote 
 
 # --- 1. CONFIGURACIÓN ---
 OUTPUT_DIR = "images"
@@ -28,11 +28,9 @@ FEED_URL = "https://juntozstgsrvproduction.blob.core.windows.net/juntoz-feeds/go
 SHEET_ID = "14PcRSXLFHCmXgLdr42Phlp0U-J8jM5ZTe9-Pu1p6NE8"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# AJUSTES DE RENDIMIENTO
 BATCH_SIZE = 5000 
 MAX_THREADS = 40  
 
-# Cargar Credenciales
 credentials_json = os.environ.get('GCP_CREDENTIALS')
 if credentials_json:
     creds_dict = json.loads(credentials_json)
@@ -44,7 +42,6 @@ else:
         print("Error: Credenciales no encontradas.")
         exit(1)
 
-# Recursos Gráficos
 LOGO_PATH = os.path.join(ASSETS_DIR, "logojuntozblanco.png")
 try:
     LOGO_ORIGINAL = Image.open(LOGO_PATH).convert("RGBA")
@@ -80,7 +77,6 @@ def git_autosave(batch_index):
 # --- 3. PROCESAMIENTO ---
 def procesar_fila(row):
     try:
-        # A. PREPARAR DATOS
         raw_sale_price = str(row['sale_price'])
         raw_price = str(row['price'])
         
@@ -92,28 +88,23 @@ def procesar_fila(row):
         target_path = os.path.join(OUTPUT_DIR, file_name)
         final_url = f"{BASE_URL_IMG}{file_name}"
 
-        # B. VALIDACIÓN RÁPIDA (Si existe, salta inmediatamente)
         if os.path.exists(target_path):
             return final_url, False
 
-        # C. Limpieza viejos
         try:
             for f in glob.glob(os.path.join(OUTPUT_DIR, f"{row['id']}_*.jpg")):
                 os.remove(f)
         except: pass
 
-        # D. 🔥 LIMPIEZA Y DESCARGA ROBUSTA (AQUÍ ESTÁ LA MEJORA)
         raw_url = str(row['image_link']).strip()
-        # Arreglamos espacios en la URL (como el caso del reloj Fossil)
         clean_url = quote(raw_url, safe="%/:=&?~#+!$,;'@()*[]") 
         
-        res_prod = requests.get(clean_url, headers=HEADERS, timeout=15) # Más timeout
+        res_prod = requests.get(clean_url, headers=HEADERS, timeout=15) 
         if res_prod.status_code != 200: 
-            return raw_url, False # Si falla, devolvemos la original limpia
+            return raw_url, False 
         
         prod_img = Image.open(BytesIO(res_prod.content)).convert("RGBA")
 
-        # E. DISEÑO
         color_morado = (141, 54, 197)
         canvas = Image.new('RGB', (1080, 1080), color=color_morado)
         draw = ImageDraw.Draw(canvas)
@@ -129,7 +120,6 @@ def procesar_fila(row):
         prod_img.thumbnail((680, 520), Image.Resampling.LANCZOS)
         canvas.paste(prod_img, ((1080 - prod_img.width)//2, 140 + (580 - prod_img.height)//2), prod_img)
 
-        # Textos
         MARGIN_RIGHT, MARGIN_LEFT = 1010, 70
         WIDTH_PRICE_MAX = 400 
         
@@ -187,8 +177,9 @@ def procesar_fila(row):
             draw.text((MARGIN_LEFT, y_pos), line, font=f_title, fill="white")
             y_pos += (size_title + 4)
 
-        canvas = canvas.resize((900, 900), Image.Resampling.LANCZOS)
-        canvas.save(target_path, "JPEG", quality=85)
+        # 🔥 AQUI LA MAGIA: Dimensiones óptimas para Facebook sin saturar GitHub
+        canvas = canvas.resize((600, 600), Image.Resampling.LANCZOS)
+        canvas.save(target_path, "JPEG", optimize=True, quality=75)
         return final_url, True
 
     except Exception as e:
@@ -201,22 +192,34 @@ def main():
     df = pd.read_csv(FEED_URL, sep='\t', on_bad_lines='skip', low_memory=False)
     df.columns = [c.strip() for c in df.columns]
     
-    # 1. Filtros Básicos
     df = df[df['availability'] == 'in stock'].copy()
     df = df[df['image_link'].notna()]
     df = df[df['image_link'].str.endswith('.jpg', na=False)]
     
-    # 2. 🔥 ELIMINAR DUPLICADOS
     total_antes = len(df)
     df.drop_duplicates(subset=['id'], keep='first', inplace=True)
     total_ahora = len(df)
     print(f">>> Duplicados eliminados: {total_antes - total_ahora}")
     
+    # 🔥 AQUI EL RECOLECTOR DE BASURA: Borra lo que ya no está en el feed
+    print(">>> Limpiando imágenes antiguas del repositorio...")
+    ids_validos = set(df['id'].astype(str).tolist())
+    archivos_borrados = 0
+    try:
+        archivos_locales = glob.glob(os.path.join(OUTPUT_DIR, "*.jpg"))
+        for ruta in archivos_locales:
+            id_archivo = os.path.basename(ruta).split('_')[0]
+            if id_archivo not in ids_validos:
+                os.remove(ruta)
+                archivos_borrados += 1
+        print(f">>> Basura eliminada: {archivos_borrados} imágenes obsoletas.")
+    except Exception as e:
+        print(f">>> Error al limpiar basura: {e}")
+    
     rows_to_process = df.to_dict('records')
     total_products = len(rows_to_process)
     print(f">>> Total productos ÚNICOS a procesar: {total_products}")
 
-    # --- INICIALIZAR SHEETS (CON BLINDAJE ANTI-ERROR 503) ---
     print(">>> [2/4] Conectando a Google Sheets...")
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -238,7 +241,6 @@ def main():
                 print("   ❌ Error crítico: No se pudo conectar a Sheets.")
                 exit(1)
     
-    # Limpiamos hoja
     try:
         sheet.clear()
         sheet.append_row(list(df.columns))
