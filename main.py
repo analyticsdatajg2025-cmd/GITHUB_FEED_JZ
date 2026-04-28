@@ -13,6 +13,7 @@ import subprocess
 import re
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
+from urllib.parse import quote # <--- NUEVA LIBRERÍA PARA LIMPIAR URLs
 
 # --- 1. CONFIGURACIÓN ---
 OUTPUT_DIR = "images"
@@ -101,10 +102,14 @@ def procesar_fila(row):
                 os.remove(f)
         except: pass
 
-        # D. Descargar
-        res_prod = requests.get(row['image_link'], headers=HEADERS, timeout=8)
+        # D. 🔥 LIMPIEZA Y DESCARGA ROBUSTA (AQUÍ ESTÁ LA MEJORA)
+        raw_url = str(row['image_link']).strip()
+        # Arreglamos espacios en la URL (como el caso del reloj Fossil)
+        clean_url = quote(raw_url, safe="%/:=&?~#+!$,;'@()*[]") 
+        
+        res_prod = requests.get(clean_url, headers=HEADERS, timeout=15) # Más timeout
         if res_prod.status_code != 200: 
-            return row['image_link'], False
+            return raw_url, False # Si falla, devolvemos la original limpia
         
         prod_img = Image.open(BytesIO(res_prod.content)).convert("RGBA")
 
@@ -201,8 +206,7 @@ def main():
     df = df[df['image_link'].notna()]
     df = df[df['image_link'].str.endswith('.jpg', na=False)]
     
-    # 2. 🔥 ELIMINAR DUPLICADOS (NUEVO)
-    # Esto asegura que si el ID se repite, solo quede el primero
+    # 2. 🔥 ELIMINAR DUPLICADOS
     total_antes = len(df)
     df.drop_duplicates(subset=['id'], keep='first', inplace=True)
     total_ahora = len(df)
