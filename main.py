@@ -29,8 +29,20 @@ SHEET_ID = "14PcRSXLFHCmXgLdr42Phlp0U-J8jM5ZTe9-Pu1p6NE8"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 BATCH_SIZE = 5000 
-MAX_THREADS = 40  
+MAX_THREADS = 40 
 
+# Tipografías y Recursos
+LOGO_PATH = os.path.join(ASSETS_DIR, "logojuntozblanco.png")
+F_BOLD_PATH = "HurmeGeometricSans1 Bold.otf"
+F_OBL_PATH = "HurmeGeometricSans1 Oblique.otf"
+F_REG_PATH = "HurmeGeometricSans1.otf"
+
+try:
+    LOGO_ORIGINAL = Image.open(LOGO_PATH).convert("RGBA")
+except:
+    LOGO_ORIGINAL = Image.new('RGBA', (400, 150), (255, 255, 255, 100))
+
+# Cargar Credenciales
 credentials_json = os.environ.get('GCP_CREDENTIALS')
 if credentials_json:
     creds_dict = json.loads(credentials_json)
@@ -42,22 +54,12 @@ else:
         print("Error: Credenciales no encontradas.")
         exit(1)
 
-LOGO_PATH = os.path.join(ASSETS_DIR, "logojuntozblanco.png")
-try:
-    LOGO_ORIGINAL = Image.open(LOGO_PATH).convert("RGBA")
-except:
-    LOGO_ORIGINAL = Image.new('RGBA', (400, 150), (255, 255, 255, 100))
-
+# --- 2. FUNCIONES AUXILIARES ---
 def load_font(filename, size):
     path = os.path.join(ASSETS_DIR, filename)
     try: return ImageFont.truetype(path, size)
     except: return ImageFont.load_default()
 
-F_BOLD_PATH = "HurmeGeometricSans1 Bold.otf"
-F_OBL_PATH = "HurmeGeometricSans1 Oblique.otf"
-F_REG_PATH = "HurmeGeometricSans1.otf"
-
-# --- 2. FUNCIONES AUXILIARES ---
 def get_clean_price_val(val_str):
     if pd.isna(val_str): return 0.0
     s = str(val_str).upper().replace(' PEN', '').replace('PEN', '').replace(',', '').strip()
@@ -70,41 +72,38 @@ def git_autosave(batch_index):
         msg = f"Auto-save: Bloque {batch_index}"
         subprocess.run(["git", "commit", "-m", msg], check=False)
         subprocess.run(["git", "push"], check=False)
-        print(f"   💾 [Git] Progreso guardado (Bloque {batch_index}).")
-    except Exception as e:
-        print(f"   ⚠️ Error Git Autosave: {e}")
+    except: pass
 
-# --- 3. PROCESAMIENTO ---
+# --- 3. PROCESAMIENTO DE IMAGEN ---
 def procesar_fila(row):
     try:
-        raw_sale_price = str(row['sale_price'])
-        raw_price = str(row['price'])
-        
-        val_sale_price = get_clean_price_val(raw_sale_price)
-        val_price = get_clean_price_val(raw_price)
+        val_sale_price = get_clean_price_val(row['sale_price'])
+        val_price = get_clean_price_val(row['price'])
 
+        # EL NOMBRE DE LA IMAGEN INCLUYE EL PRECIO PARA FORZAR CACHÉ
         price_tag = f"{val_sale_price:.2f}".replace('.', '_')
         file_name = f"{row['id']}_{price_tag}.jpg"
         target_path = os.path.join(OUTPUT_DIR, file_name)
         final_url = f"{BASE_URL_IMG}{file_name}"
 
+        # Si la imagen ya existe con ese ID y ese Precio, saltamos
         if os.path.exists(target_path):
             return final_url, False
 
-        try:
-            for f in glob.glob(os.path.join(OUTPUT_DIR, f"{row['id']}_*.jpg")):
-                os.remove(f)
-        except: pass
+        # Borrar versiones anteriores del mismo producto con precio diferente
+        for f in glob.glob(os.path.join(OUTPUT_DIR, f"{row['id']}_*.jpg")):
+            try: os.remove(f)
+            except: pass
 
+        # Descargar imagen
         raw_url = str(row['image_link']).strip()
         clean_url = quote(raw_url, safe="%/:=&?~#+!$,;'@()*[]") 
-        
         res_prod = requests.get(clean_url, headers=HEADERS, timeout=15) 
-        if res_prod.status_code != 200: 
-            return raw_url, False 
+        if res_prod.status_code != 200: return row['image_link'], False 
         
         prod_img = Image.open(BytesIO(res_prod.content)).convert("RGBA")
 
+        # --- DISEÑO ---
         color_morado = (141, 54, 197)
         canvas = Image.new('RGB', (1080, 1080), color=color_morado)
         draw = ImageDraw.Draw(canvas)
@@ -120,139 +119,84 @@ def procesar_fila(row):
         prod_img.thumbnail((680, 520), Image.Resampling.LANCZOS)
         canvas.paste(prod_img, ((1080 - prod_img.width)//2, 140 + (580 - prod_img.height)//2), prod_img)
 
+        # Precios y Textos
         MARGIN_RIGHT, MARGIN_LEFT = 1010, 70
-        WIDTH_PRICE_MAX = 400 
-        
         p_sale_str = f"{val_sale_price:.2f}"
         size_sale = 135
         f_sale = load_font(F_BOLD_PATH, size_sale)
         f_symbol = load_font(F_BOLD_PATH, int(size_sale * 0.5))
 
         while size_sale > 50:
-            w_sale = draw.textlength(p_sale_str, font=f_sale)
-            w_sym = draw.textlength("S/", font=f_symbol)
-            if (w_sym + 12 + w_sale) <= WIDTH_PRICE_MAX: break
+            if (draw.textlength("S/", font=f_symbol) + 12 + draw.textlength(p_sale_str, font=f_sale)) <= 400: break
             size_sale -= 4
             f_sale = load_font(F_BOLD_PATH, size_sale)
             f_symbol = load_font(F_BOLD_PATH, int(size_sale * 0.5))
 
-        w_total_sale = draw.textlength("S/", font=f_symbol) + 12 + draw.textlength(p_sale_str, font=f_sale)
-        x_sale = MARGIN_RIGHT - w_total_sale
-        y_base = 920 - (size_sale * 0.1) 
-        draw.text((x_sale, y_base + size_sale*0.05), "S/", font=f_symbol, fill="white")
-        draw.text((x_sale + draw.textlength("S/", font=f_symbol) + 12, y_base), p_sale_str, font=f_sale, fill="white")
+        w_sale_full = draw.textlength("S/", font=f_symbol) + 12 + draw.textlength(p_sale_str, font=f_sale)
+        draw.text((MARGIN_RIGHT - w_sale_full, 920 - size_sale*0.05), "S/", font=f_symbol, fill="white")
+        draw.text((MARGIN_RIGHT - w_sale_full + draw.textlength("S/", font=f_symbol) + 12, 920 - size_sale*0.1), p_sale_str, font=f_sale, fill="white")
 
         p_reg_str = f"Precio regular: S/{val_price:.2f}"
         f_reg = load_font(F_REG_PATH, 30)
-        w_reg = draw.textlength(p_reg_str, font=f_reg)
-        draw.text((MARGIN_RIGHT - w_reg, 865), p_reg_str, font=f_reg, fill="white")
+        draw.text((MARGIN_RIGHT - draw.textlength(p_reg_str, font=f_reg), 865), p_reg_str, font=f_reg, fill="white")
 
-        brand_txt = str(row['brand']).upper().strip()
-        size_brand = 28
-        f_brand = load_font(F_BOLD_PATH, size_brand)
+        draw.text((MARGIN_LEFT, 860), str(row['brand']).upper().strip(), font=load_font(F_BOLD_PATH, 28), fill="white")
         
-        while size_brand > 18:
-            if draw.textlength(brand_txt, font=f_brand) < 540: break
-            size_brand -= 2
-            f_brand = load_font(F_BOLD_PATH, size_brand)
-        draw.text((MARGIN_LEFT, 860), brand_txt, font=f_brand, fill="white")
-
-        title_txt = str(row['title']).strip()
-        size_title = 38
-        f_title = load_font(F_OBL_PATH, size_title)
-        lines = []
-        while size_title > 20:
-            avg_char = f_title.getlength("a") or 10
-            chars_per_line = int(540 / avg_char)
-            temp_lines = textwrap.wrap(title_txt, width=chars_per_line)
-            if len(temp_lines) <= 3 and all(draw.textlength(l, font=f_title) <= 540 for l in temp_lines):
-                lines = temp_lines
-                break
-            size_title -= 2
-            f_title = load_font(F_OBL_PATH, size_title)
-        if not lines: lines = textwrap.wrap(title_txt, width=40)[:3]
-        
+        f_title = load_font(F_OBL_PATH, 38)
+        lines = textwrap.wrap(str(row['title']).strip(), width=30)[:3]
         y_pos = 910
         for line in lines:
             draw.text((MARGIN_LEFT, y_pos), line, font=f_title, fill="white")
-            y_pos += (size_title + 4)
+            y_pos += 42
 
-        # 🔥 AQUI LA MAGIA: Dimensiones óptimas para Facebook sin saturar GitHub
         canvas = canvas.resize((600, 600), Image.Resampling.LANCZOS)
         canvas.save(target_path, "JPEG", optimize=True, quality=75)
         return final_url, True
 
     except Exception as e:
-        print(f"Error en ID {row.get('id', '?')}: {e}")
         return row['image_link'], False
 
 # --- 4. MAIN ---
 def main():
-    print(">>> [1/4] Descargando Feed...")
-    df = pd.read_csv(FEED_URL, sep='\t', on_bad_lines='skip', low_memory=False)
+    print(">>> [1/4] Descargando Feed y Limpiando Duplicados...")
+    res_feed = requests.get(FEED_URL, headers=HEADERS, timeout=60)
+    if res_feed.status_code != 200: exit(1)
+        
+    # LEEMOS EL FEED CON SEPARADOR TABULACIÓN Y FORZAMOS LIMPIEZA DE ESPACIOS
+    df = pd.read_csv(BytesIO(res_feed.content), sep='\t', on_bad_lines='skip', low_memory=False)
     df.columns = [c.strip() for c in df.columns]
     
-    df = df[df['availability'] == 'in stock'].copy()
+    # --- FILTROS DE CALIDAD ---
+    df = df[df['availability'].astype(str).str.lower().str.contains('in stock')].copy()
     df = df[df['image_link'].notna()]
-    df = df[df['image_link'].str.endswith('.jpg', na=False)]
     
-    total_antes = len(df)
+    # ESTO ELIMINA CUALQUIER REPETICIÓN FANTASMA BASÁNDOSE EN EL ID ÚNICO DEL FEED
     df.drop_duplicates(subset=['id'], keep='first', inplace=True)
-    total_ahora = len(df)
-    print(f">>> Duplicados eliminados: {total_antes - total_ahora}")
     
-    # 🔥 AQUI EL RECOLECTOR DE BASURA: Borra lo que ya no está en el feed
-    print(">>> Limpiando imágenes antiguas del repositorio...")
+    # Recolector de Basura
     ids_validos = set(df['id'].astype(str).tolist())
-    archivos_borrados = 0
-    try:
-        archivos_locales = glob.glob(os.path.join(OUTPUT_DIR, "*.jpg"))
-        for ruta in archivos_locales:
-            id_archivo = os.path.basename(ruta).split('_')[0]
-            if id_archivo not in ids_validos:
-                os.remove(ruta)
-                archivos_borrados += 1
-        print(f">>> Basura eliminada: {archivos_borrados} imágenes obsoletas.")
-    except Exception as e:
-        print(f">>> Error al limpiar basura: {e}")
-    
-    rows_to_process = df.to_dict('records')
-    total_products = len(rows_to_process)
-    print(f">>> Total productos ÚNICOS a procesar: {total_products}")
+    for ruta in glob.glob(os.path.join(OUTPUT_DIR, "*.jpg")):
+        if os.path.basename(ruta).split('_')[0] not in ids_validos:
+            try: os.remove(ruta)
+            except: pass
 
-    print(">>> [2/4] Conectando a Google Sheets...")
+    rows_to_process = df.to_dict('records')
+    print(f">>> Total productos ÚNICOS a procesar: {len(rows_to_process)}")
+
+    # Conexión Sheets
+    print(">>> [2/4] Limpiando Google Sheets...")
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID).sheet1
     
-    max_retries = 5
-    sheet = None
-    
-    for attempt in range(max_retries):
-        try:
-            sheet = client.open_by_key(SHEET_ID).sheet1
-            print("   ✅ Conexión exitosa a Sheets.")
-            break 
-        except Exception as e:
-            print(f"   ⚠️ Intento {attempt+1}/{max_retries} fallido: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(10)
-            else:
-                print("   ❌ Error crítico: No se pudo conectar a Sheets.")
-                exit(1)
-    
-    try:
-        sheet.clear()
-        sheet.append_row(list(df.columns))
-    except Exception as e:
-        print(f"Error al limpiar hoja: {e}")
-    
-    print(f">>> [3/4] Procesando en Bloques de {BATCH_SIZE}...")
-    
-    for i in range(0, total_products, BATCH_SIZE):
-        batch = rows_to_process[i : i + BATCH_SIZE]
-        print(f"\n⚡ Procesando Bloque {i//BATCH_SIZE + 1}: {len(batch)} productos")
+    # BORRADO TOTAL DE LA HOJA PARA EVITAR PRODUCTOS VIEJOS O ROTOS
+    sheet.clear()
+    sheet.append_row(list(df.columns))
 
+    print(">>> [3/4] Generando Imágenes y subiendo datos...")
+    for i in range(0, len(rows_to_process), BATCH_SIZE):
+        batch = rows_to_process[i : i + BATCH_SIZE]
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
             results = list(tqdm(executor.map(procesar_fila, batch), total=len(batch), leave=False))
         
@@ -261,23 +205,16 @@ def main():
         
         batch_df = pd.DataFrame(batch)
         batch_df['image_link'] = batch_urls 
-        batch_df = batch_df.astype(str) 
-
+        
         if any_new: git_autosave(i // BATCH_SIZE + 1)
-        else: print("   ⏩ (Skipping Git Push - No hay imágenes nuevas)")
-
+        
+        # SUBIDA AL SHEETS
         try:
-            data = batch_df.values.tolist()
-            sheet.append_rows(data, value_input_option='RAW')
-            print(f"   📊 [Sheets] Bloque subido.")
+            sheet.append_rows(batch_df.astype(str).values.tolist(), value_input_option='RAW')
             time.sleep(2)
-        except Exception as e:
-            print(f"   ⚠️ Error Sheets Upload: {e}")
-            time.sleep(10)
-            try: sheet.append_rows(data, value_input_option='RAW')
-            except: pass
+        except: pass
 
-    print("\n>>> 🏁 ¡PROCESO COMPLETADO!")
+    print("\n>>> 🏁 ¡CATÁLOGO ÚNICO Y ACTUALIZADO COMPLETADO!")
 
 if __name__ == "__main__":
     main()
