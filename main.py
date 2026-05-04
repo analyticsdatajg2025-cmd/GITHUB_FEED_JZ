@@ -80,22 +80,18 @@ def procesar_fila(row):
         val_sale_price = get_clean_price_val(row['sale_price'])
         val_price = get_clean_price_val(row['price'])
 
-        # EL NOMBRE DE LA IMAGEN INCLUYE EL PRECIO PARA FORZAR CACHÉ
         price_tag = f"{val_sale_price:.2f}".replace('.', '_')
         file_name = f"{row['id']}_{price_tag}.jpg"
         target_path = os.path.join(OUTPUT_DIR, file_name)
         final_url = f"{BASE_URL_IMG}{file_name}"
 
-        # Si la imagen ya existe con ese ID y ese Precio, saltamos
         if os.path.exists(target_path):
             return final_url, False
 
-        # Borrar versiones anteriores del mismo producto con precio diferente
         for f in glob.glob(os.path.join(OUTPUT_DIR, f"{row['id']}_*.jpg")):
             try: os.remove(f)
             except: pass
 
-        # Descargar imagen
         raw_url = str(row['image_link']).strip()
         clean_url = quote(raw_url, safe="%/:=&?~#+!$,;'@()*[]") 
         res_prod = requests.get(clean_url, headers=HEADERS, timeout=15) 
@@ -103,7 +99,6 @@ def procesar_fila(row):
         
         prod_img = Image.open(BytesIO(res_prod.content)).convert("RGBA")
 
-        # --- DISEÑO ---
         color_morado = (141, 54, 197)
         canvas = Image.new('RGB', (1080, 1080), color=color_morado)
         draw = ImageDraw.Draw(canvas)
@@ -119,7 +114,7 @@ def procesar_fila(row):
         prod_img.thumbnail((680, 520), Image.Resampling.LANCZOS)
         canvas.paste(prod_img, ((1080 - prod_img.width)//2, 140 + (580 - prod_img.height)//2), prod_img)
 
-        # Precios y Textos
+        # Precios
         MARGIN_RIGHT, MARGIN_LEFT = 1010, 70
         p_sale_str = f"{val_sale_price:.2f}"
         size_sale = 135
@@ -136,10 +131,7 @@ def procesar_fila(row):
         draw.text((MARGIN_RIGHT - w_sale_full, 920 - size_sale*0.05), "S/", font=f_symbol, fill="white")
         draw.text((MARGIN_RIGHT - w_sale_full + draw.textlength("S/", font=f_symbol) + 12, 920 - size_sale*0.1), p_sale_str, font=f_sale, fill="white")
 
-        p_reg_str = f"Precio regular: S/{val_price:.2f}"
-        f_reg = load_font(F_REG_PATH, 30)
-        draw.text((MARGIN_RIGHT - draw.textlength(p_reg_str, font=f_reg), 865), p_reg_str, font=f_reg, fill="white")
-
+        draw.text((MARGIN_RIGHT - draw.textlength(f"Precio regular: S/{val_price:.2f}", font=load_font(F_REG_PATH, 30)), 865), f"Precio regular: S/{val_price:.2f}", font=load_font(F_REG_PATH, 30), fill="white")
         draw.text((MARGIN_LEFT, 860), str(row['brand']).upper().strip(), font=load_font(F_BOLD_PATH, 28), fill="white")
         
         f_title = load_font(F_OBL_PATH, 38)
@@ -152,25 +144,28 @@ def procesar_fila(row):
         canvas = canvas.resize((600, 600), Image.Resampling.LANCZOS)
         canvas.save(target_path, "JPEG", optimize=True, quality=75)
         return final_url, True
-
-    except Exception as e:
+    except:
         return row['image_link'], False
 
 # --- 4. MAIN ---
 def main():
-    print(">>> [1/4] Descargando Feed y Limpiando Duplicados...")
+    print(">>> [1/4] Descargando Feed y Limpiando Datos...")
     res_feed = requests.get(FEED_URL, headers=HEADERS, timeout=60)
     if res_feed.status_code != 200: exit(1)
         
-    # LEEMOS EL FEED CON SEPARADOR TABULACIÓN Y FORZAMOS LIMPIEZA DE ESPACIOS
+    # LEEMOS CON SEPARADOR TABULACIÓN Y FORZAMOS LIMPIEZA DE COLUMNAS
     df = pd.read_csv(BytesIO(res_feed.content), sep='\t', on_bad_lines='skip', low_memory=False)
     df.columns = [c.strip() for c in df.columns]
     
-    # --- FILTROS DE CALIDAD ---
-    df = df[df['availability'].astype(str).str.lower().str.contains('in stock')].copy()
-    df = df[df['image_link'].notna()]
+    # --- FILTROS DE CALIDAD Y UNICIDAD ---
+    # 1. Eliminar filas donde falten datos críticos (NaN)
+    df = df.dropna(subset=['id', 'link', 'image_link'])
     
-    # ESTO ELIMINA CUALQUIER REPETICIÓN FANTASMA BASÁNDOSE EN EL ID ÚNICO DEL FEED
+    # 2. Solo productos con stock
+    df = df[df['availability'].astype(str).str.lower().str.contains('in stock')].copy()
+    
+    # 3. UNICIDAD ABSOLUTA POR ID: Esto evita las "copias" en el Sheets
+    # Si el ID ya existe, se elimina la fila duplicada.
     df.drop_duplicates(subset=['id'], keep='first', inplace=True)
     
     # Recolector de Basura
@@ -181,20 +176,17 @@ def main():
             except: pass
 
     rows_to_process = df.to_dict('records')
-    print(f">>> Total productos ÚNICOS a procesar: {len(rows_to_process)}")
+    print(f">>> Total productos ÚNICOS: {len(rows_to_process)}")
 
-    # Conexión Sheets
-    print(">>> [2/4] Limpiando Google Sheets...")
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).sheet1
+    # Sheets
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
+    sheet = gspread.authorize(creds).open_by_key(SHEET_ID).sheet1
     
-    # BORRADO TOTAL DE LA HOJA PARA EVITAR PRODUCTOS VIEJOS O ROTOS
+    # IMPORTANTE: Vaciado total antes de subir
     sheet.clear()
     sheet.append_row(list(df.columns))
 
-    print(">>> [3/4] Generando Imágenes y subiendo datos...")
+    print(">>> [3/4] Generando Imágenes y Subiendo...")
     for i in range(0, len(rows_to_process), BATCH_SIZE):
         batch = rows_to_process[i : i + BATCH_SIZE]
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
@@ -208,13 +200,13 @@ def main():
         
         if any_new: git_autosave(i // BATCH_SIZE + 1)
         
-        # SUBIDA AL SHEETS
         try:
+            # Subida limpia de datos
             sheet.append_rows(batch_df.astype(str).values.tolist(), value_input_option='RAW')
             time.sleep(2)
         except: pass
 
-    print("\n>>> 🏁 ¡CATÁLOGO ÚNICO Y ACTUALIZADO COMPLETADO!")
+    print("\n>>> 🏁 ¡PROCESO COMPLETADO SIN DUPLICADOS!")
 
 if __name__ == "__main__":
     main()
